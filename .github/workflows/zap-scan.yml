@@ -1,0 +1,95 @@
+name: ZAP Baseline Scan
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  zap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm ci || npm install
+
+      - name: Start app (background)
+        run: |
+          npm start &> app.log &
+          npx --yes wait-on http://localhost:8080 --timeout 60000
+        env:
+          PORT: 8080
+
+      - name: Pull ZAP Docker
+        run: docker pull owasp/zap2docker-stable
+
+      - name: Run ZAP Baseline (gera HTML e JSON)
+        run: |
+          docker run --rm --network host -v "$PWD:/zap/wrk" owasp/zap2docker-stable \
+            zap-baseline.py \
+              -t http://localhost:8080 \
+              -r zap-report.html \
+              -J zap-report.json \
+              -m 300 \
+              -d
+
+      - name: Mostrar primeiros bytes do JSON (debug)
+        run: head -c 1000 zap-report.json || true
+
+      - name: Instalar jq (parser JSON)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Contabilizar alertas e falhar por Alta/Crítica
+        id: parse
+        run: |
+          TOTAL=$(jq '[.site[]?.alerts[]] | length' zap-report.json)
+          HIGH=$(jq '[.site[]?.alerts[] | select(.riskcode=="3")] | length' zap-report.json)
+          MEDIUM=$(jq '[.site[]?.alerts[] | select(.riskcode=="2")] | length' zap-report.json)
+          LOW=$(jq '[.site[]?.alerts[] | select(.riskcode=="1")] | length' zap-report.json)
+          INFO=$(jq '[.site[]?.alerts[] | select(.riskcode=="0")] | length' zap-report.json)
+
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+          echo "low=$LOW" >> $GITHUB_OUTPUT
+          echo "info=$INFO" >> $GITHUB_OUTPUT
+
+          echo "TOTAL=$TOTAL  HIGH=$HIGH  MEDIUM=$MEDIUM  LOW=$LOW  INFO=$INFO"
+
+          if [ "$HIGH" -gt 0 ]; then
+            echo "⚠️ Encontradas vulnerabilidades High. Falhando pipeline."
+            exit 1
+          fi
+
+      - name: Top 10 tipos de vulnerabilidade
+        run: |
+          jq -r '.site[]?.alerts[]?.name' zap-report.json | sort | uniq -c | sort -nr | head -n 10 || true
+
+      - name: Publicar sumário no Job
+        run: |
+          {
+            echo "### 🛡️ ZAP Baseline — Resumo"
+            echo ""
+            echo "- Total de alertas: **${{ steps.parse.outputs.total }}**"
+            echo "- Por severidade: **High=${{ steps.parse.outputs.high }}**, **Medium=${{ steps.parse.outputs.medium }}**, **Low=${{ steps.parse.outputs.low }}**, **Info=${{ steps.parse.outputs.info }}**"
+            echo ""
+            echo "Relatório completo anexado como artefato."
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artefato (HTML + JSON + logs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: |
+            zap-report.html
+            zap-report.json
+            app.log
