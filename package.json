@@ -1,0 +1,23 @@
+{
+  "name": "clickseguro-web",
+  "version": "1.0.0",
+  "description": "Aplicação web simples para testes com OWASP ZAP no pipeline do GitHub Actions.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "clickseguro",
+    "owasp",
+    "zap",
+    "security",
+    "github-actions"
+  ],
+  "author": "Seu Nome",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "helmet": "^7.0.0",
+    "wait-on": "^7.2.0"
+  }
+}
